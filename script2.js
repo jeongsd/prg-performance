@@ -6,7 +6,9 @@ export let options = {
   executor: "ramping-arrival-rate", //Assure load increase if the system slows
   stages: [
     // Breakpoint testing
-    { duration: "2m", target: 1000 },
+    { duration: "10s", target: 300 },
+    { duration: "1m", target: 300 },
+    { duration: "10s", target: 0 },
   ],
   // vus: 50, // Set number of virtual users
 };

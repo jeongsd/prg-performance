@@ -1,7 +1,11 @@
-import { build } from "bun";
+
 import { builder } from "./builder";
 import { db } from "./db";
 import { decodeGlobalID } from "@pothos/plugin-relay";
+
+async function delay(ms: number) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 const User = builder.prismaNode("User", {
   id: { field: "id" },
@@ -9,7 +13,6 @@ const User = builder.prismaNode("User", {
     email: t.exposeString("email"),
     username: t.exposeString("username"),
     posts: t.relation("posts"),
-    comments: t.relatedConnection("comments", { cursor: "id" }),
   }),
 });
 
@@ -53,16 +56,10 @@ builder.queryType({
       cursor: "id",
       resolve: async (query) => {
         const posts = await db.post.findMany({
-          // ...query,
-          where: {},
+          ...query,
         });
 
-        console.log(
-          await db.user.findMany({
-            // ...query,
-            where: {},
-          })
-        );
+        await delay(500)
 
         return posts;
       },
@@ -125,10 +122,7 @@ builder.mutationType({
         input: t.arg({ type: PostInput, required: true }),
       },
       resolve: (include, root, args, ctx, info) => {
-        console.log("args.input", args.input);
         const { id: authorId } = decodeGlobalID(String(args.input.authorId));
-
-        console.log("authorId", authorId);
 
         return db.post.create({
           data: {
