@@ -12,7 +12,7 @@ const User = builder.prismaNode("User", {
   fields: (t) => ({
     email: t.exposeString("email"),
     username: t.exposeString("username"),
-    posts: t.relation("posts"),
+    posts: t.relation("posts", { nullable: true }),
   }),
 });
 
@@ -21,8 +21,8 @@ builder.prismaNode("Post", {
   fields: (t) => ({
     title: t.exposeString("title"),
     content: t.exposeString("content"),
-    author: t.relation("author"),
-    comments: t.relation("comments"),
+    author: t.relation("author", { nullable: true }),
+    comments: t.relation("comments", { nullable: true }),
   }),
 });
 
@@ -30,8 +30,8 @@ builder.prismaNode("Comment", {
   id: { field: "id" },
   fields: (t) => ({
     comment: t.exposeString("comment"),
-    author: t.relation("author"),
-    post: t.relation("post"),
+    author: t.relation("author", { nullable: true }),
+    post: t.relation("post", { nullable: true }),
   }),
 });
 
@@ -43,8 +43,11 @@ builder.queryType({
       args: {
         id: t.arg.id({ required: true }),
       },
-      resolve: (query, root, args) => {
+      resolve: async (query, root, args) => {
         const { id } = decodeGlobalID(String(args.id));
+
+        await delay(1000)
+
         return db.post.findUnique({
           ...query,
           where: { id: Number.parseInt(id, 10) },

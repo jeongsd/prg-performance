@@ -41,4 +41,9 @@ yarn-error.log*
 package-lock.json
 **/*.bun
 
-# prisma/client
+prisma/client
+prisma/migrations
+prisma/dev.db
+prisma/dev.db-journal
+prisma/generated.d.ts
+

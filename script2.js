@@ -1,105 +1,174 @@
 import http from "k6/http";
 import { sleep, check } from "k6";
+import { sha256 } from "k6/crypto";
+
 import { randomString } from "https://jslib.k6.io/k6-utils/1.1.0/index.js";
 
-export let options = {
-  executor: "ramping-arrival-rate", //Assure load increase if the system slows
-  stages: [
-    // Breakpoint testing
-    { duration: "10s", target: 300 },
-    { duration: "1m", target: 300 },
-    { duration: "10s", target: 0 },
-  ],
-  // vus: 50, // Set number of virtual users
-};
-
-const BASE_URL = "http://localhost:3000/graphql";
-
-function createUser() {
-  let username = randomString(10);
-  let email = `user-${randomString(10)}@artillery.io`;
-  let mutation = `
-        mutation CreateUser($createUserInput: UserInput!) {
-            createUser(input: $createUserInput) {
-                id
-            }
-        }`;
-  let variables = {
-    createUserInput: {
-      username: username,
-      email: email,
-    },
-  };
-  let headers = {
-    "Content-Type": "application/json",
-  };
-  let body = JSON.stringify({ query: mutation, variables: variables });
-  let response = http.post(BASE_URL, body, { headers: headers });
-  check(response, { "created user": (r) => r.status === 200 });
-  return JSON.parse(response.body).data.createUser.id;
+function generateAPQHash(query) {
+  return sha256(query, "hex");
 }
 
-export default function () {
-  let userId = createUser();
+const GRAPHQL_ENDPOINT = "http://localhost:3000/graphql";
 
-  // Fetch user details
-  let userQuery = `
-        query UserQuery($userId: ID!) {
-            user(id: $userId) {
-                username
-                email
-            }
-        }`;
-  http.post(
-    BASE_URL,
-    JSON.stringify({
-      query: userQuery,
-      variables: { userId: userId },
-    }),
-    { headers: { "Content-Type": "application/json" } }
-  );
-
-  // Create multiple posts
-  for (let i = 0; i < 10; i++) {
-    let createPost = `
-            mutation CreatePost($createPostInput: PostInput!) {
-                createPost(input: $createPostInput) {
-                    id
-                }
-            }`;
-    http.post(
-      BASE_URL,
-      JSON.stringify({
-        query: createPost,
-        variables: {
-          createPostInput: {
-            authorId: userId,
-            title: randomString(10),
-            content: randomString(20),
-          },
-        },
-      }),
-      { headers: { "Content-Type": "application/json" } }
-    );
-  }
-
-  // Fetch posts
-  let postsQuery = `
-        query Posts {
-            posts(first: 1000) {
-                edges {
-                    node {
-                        id
-                        title
-                        content
-                    }
-                }
-            }
-        }`;
-  http.post(BASE_URL, JSON.stringify({ query: postsQuery }), {
-    headers: { "Content-Type": "application/json" },
+function performQuery(query, variables = {}, operationName = null) {
+  const queryHash = generateAPQHash(query);
+  let body = JSON.stringify({
+    operationName: operationName,
+    variables: variables,
+    extensions: {
+      persistedQuery: {
+        version: 1,
+        sha256Hash: queryHash,
+      },
+    },
   });
 
-  // Sleep between iterations
-  sleep(1);
+  // Initial request with the APQ hash
+  let headers = { "Content-Type": "application/json" };
+  let response = http.post(GRAPHQL_ENDPOINT, body, { headers: headers });
+  let jsonResponse = JSON.parse(response.body);
+
+  // Check if server has requested the full query
+  if (
+    jsonResponse.errors
+    // &&
+    // jsonResponse.errors.some((e) => e.message === "PersistedQueryNotFound")
+  ) {
+    // Resend with full query text
+    body = JSON.stringify({
+      query: query,
+      operationName: operationName,
+      variables: variables,
+      extensions: {
+        persistedQuery: {
+          version: 1,
+          sha256Hash: queryHash,
+        },
+      },
+    });
+    response = http.post(GRAPHQL_ENDPOINT, body, { headers: headers });
+    jsonResponse = JSON.parse(response.body);
+  } else {
+    // console.log("is hit");
+  }
+
+  check(response, {
+    "is status 200": (r) => r.status === 200,
+    "is data returned": (r) => r.json().data != null,
+  });
+
+  return jsonResponse;
+}
+
+export let options = {
+  stages: [
+    { duration: "10s", target: 200 },
+    { duration: "1m", target: 200 },
+    { duration: "10s", target: 0 },
+  ],
+};
+
+export default function () {
+  let username = randomString(10);
+  let email = `user-${randomString(10)}@artillery.io`;
+
+  let createUserQuery = `
+    mutation CreateUser($username: String!, $email: String!) {
+      createUser(input: {username: $username, email: $email}) {
+        id
+      }
+    }
+  `;
+  let createUserResult = performQuery(
+    createUserQuery,
+    { username, email },
+    "CreateUser"
+  );
+  // console.log(JSON.stringify(createUserResult, null, " "));
+  const userId = createUserResult.data.createUser.id;
+
+  let createPostQuery = `
+    mutation CreatePost($authorId: ID!, $title: String!, $content: String!) {
+      createPost(input: {authorId: $authorId, title: $title, content: $content}) {
+        id
+      }
+    }
+  `;
+  let createPostResult = performQuery(
+    createPostQuery,
+    { authorId: userId, title: randomString(10), content: randomString(20) },
+    "CreatePost"
+  );
+  const postId = createPostResult.data.createPost.id;
+
+  performQuery(
+    `fragment UserFragment on User {
+        id
+        email
+        username
+        email
+        posts {
+          comments {
+            author {
+              id
+            }
+          }
+        }
+      }
+
+      fragment PostFragment on Post {
+        id
+        title
+        author {
+          id
+          email
+          ...UserFragment
+          posts {
+            comments {
+              author {
+                id
+              }
+            }
+          }
+        }
+      }
+
+      query Query($userId: ID!, $postId: ID!) {
+        user(id: $userId) {
+          ...UserFragment
+        }
+        posts {
+          edges {
+            node {
+              ...PostFragment
+            }
+          }
+        }
+        post(id: $postId) {
+          id
+          title
+          ...PostFragment
+          author {
+            id
+            email
+            ...UserFragment
+            posts {
+              ...PostFragment
+              comments {
+                author {
+                  id
+                }
+              }
+            }
+          }
+        }
+      }`,
+    {
+      userId,
+      postId,
+    },
+    "Query"
+  );
+
+  sleep(1); // Sleep between iterations
 }
