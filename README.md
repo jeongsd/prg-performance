@@ -1,5 +1,8 @@
 # Elysia with Bun runtime
 
+# 설치
+https://bun.sh/docs/installation
+
 # 초기화
 ```sh
 npx prisma migrate dev --name init    
